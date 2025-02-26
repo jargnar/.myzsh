@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env zsh
 # pdfwords.sh - Process PDF files for OCR, extract words, and output a sorted list.
 #
 # This script handles a single PDF or a directory of PDFs.
@@ -9,32 +9,24 @@
 # Usage: pdfwords input.pdf|input_folder output.txt
 #
 # Requirements: ocrmypdf, pdftotext, perl, python3, awk
+#
+# This script is fully confined to a subshell so that it can be sourced and
+# used interactively without affecting the shell environment.
 
-# ------------------------------------------------------------------------------
-# Function: check_command
-# Description: Verify that a required command is available.
-# ------------------------------------------------------------------------------
-check_command() {
-  if ! command -v "$1" &>/dev/null; then
-    echo "Error: Required command '$1' not found. Please install it." >&2
-    return 1
-  fi
-}
-
-# Check all required commands.
-for cmd in ocrmypdf pdftotext perl python3 awk; do
-  check_command "$cmd" || return 1
-done
-
-# ------------------------------------------------------------------------------
-# Function: pdfwords
-# Description: Process PDFs in a subshell to confine strict mode.
-# ------------------------------------------------------------------------------
 pdfwords() {
   (
-    # Enable strict error handling within the subshell.
+    # Enable strict error handling only in this subshell.
     set -euo pipefail
 
+    # Check for required dependencies.
+    for cmd in ocrmypdf pdftotext perl python3 awk; do
+      if ! command -v "$cmd" &>/dev/null; then
+        echo "Error: Required command '$cmd' not found. Please install it." >&2
+        exit 1
+      fi
+    done
+
+    # Ensure exactly two arguments are provided.
     if [[ $# -ne 2 ]]; then
       echo "Usage: pdfwords input.pdf|input_folder output.txt"
       exit 1
@@ -46,11 +38,10 @@ pdfwords() {
 
     # Create a temporary file for storing extracted words.
     temp_file=$(mktemp) || { echo "Error: Unable to create temporary file." >&2; exit 1; }
+    # Clean up the temporary file on exit.
+    trap 'rm -f "$temp_file"' EXIT
 
-    # ----------------------------------------------------------------------------
-    # Function: process_pdf
-    # Description: Process a single PDF file.
-    # ----------------------------------------------------------------------------
+    # Function to process a single PDF file.
     process_pdf() {
       local pdf="$1"
       echo "Processing: $pdf"
@@ -62,7 +53,7 @@ pdfwords() {
         return 1
       fi
 
-      # Extract text and then words using Perl.
+      # Extract text from the OCRed PDF and extract words via Perl.
       if ! pdftotext -enc UTF-8 "$ocr_pdf" - | \
            perl -C -lne 'while (/(\p{L}+)/g){ print $1 }' >> "$temp_file"; then
         echo "Warning: Failed to extract text from $ocr_pdf. Skipping this file." >&2
@@ -81,34 +72,30 @@ pdfwords() {
       done
       if [[ $found -eq 0 ]]; then
         echo "Error: No PDF files found in directory: $input" >&2
-        rm "$temp_file"
         exit 1
       fi
     elif [[ -f "$input" ]]; then
       process_pdf "$input"
     else
       echo "Error: '$input' is not a valid file or directory." >&2
-      rm "$temp_file"
       exit 1
     fi
 
-    # Post-process collected words:
-    # 1. Remove duplicates
+    # Post-process the collected words:
+    # 1. Remove duplicates (sort -u)
     # 2. Normalize Unicode (using Python)
     # 3. Prepend each word with its length, sort numerically, then remove the length.
     if ! sort -u "$temp_file" | \
          python3 -c "import sys,unicodedata; sys.stdout.writelines(unicodedata.normalize('NFKC', line) for line in sys.stdin)" | \
          awk '{print length, $0}' | sort -n | cut -d' ' -f2- > "$output"; then
       echo "Error: Post-processing of words failed." >&2
-      rm "$temp_file"
       exit 1
     fi
 
-    rm "$temp_file"
     echo "Processed output saved to: $output"
     exit 0
   )
 }
 
-# Expose the pdfwords function so that it is available in your interactive shell.
+# Export the function so that it is available in your interactive shell.
 export -f pdfwords
