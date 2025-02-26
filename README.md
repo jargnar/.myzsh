@@ -1,1 +1,1 @@
-some zsh sripts and utilities
+some zsh scripts and utilities (AI generated ofc)
